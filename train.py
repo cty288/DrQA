@@ -13,7 +13,18 @@ import torch
 import msgpack
 from drqa.model import DocReaderModel
 from drqa.utils import str2bool
+import gc
+import psutil
+from nltk.translate.bleu_score import sentence_bleu
+from rouge import Rouge
+from nltk.translate.bleu_score import SmoothingFunction
 
+def should_trigger_gc(threshold_percentage):
+    process = psutil.Process(os.getpid())
+    memory_info = process.memory_info()
+    used_memory_percentage = memory_info.rss / memory_info.vms * 100
+    print('Memory usage: {}%'.format(used_memory_percentage))
+    return used_memory_percentage >= threshold_percentage
 
 def main():
     args, log = setup()
@@ -41,18 +52,26 @@ def main():
         if args.reduce_lr:
             lr_decay(model.optimizer, lr_decay=args.reduce_lr)
             log.info('[learning rate reduced by {}]'.format(args.reduce_lr))
+        
         batches = BatchGen(dev, batch_size=args.batch_size, evaluation=True, gpu=args.cuda)
-        predictions = []
-        for i, batch in enumerate(batches):
-            predictions.extend(model.predict(batch))
-            log.debug('> evaluating [{}/{}]'.format(i, len(batches)))
-        em, f1 = score(predictions, dev_y)
-        log.info("[dev EM: {} F1: {}]".format(em, f1))
-        if math.fabs(em - checkpoint['em']) > 1e-3 or math.fabs(f1 - checkpoint['f1']) > 1e-3:
-            log.info('Inconsistent: recorded EM: {} F1: {}'.format(checkpoint['em'], checkpoint['f1']))
-            log.error('Error loading model: current code is inconsistent with code used to train the previous model.')
-            exit(1)
-        best_val_score = checkpoint['best_eval']
+        
+        if args.eval_only:
+            predictions = []
+            for i, batch in enumerate(batches):
+                predictions.extend(model.predict(batch))
+                log.debug('> evaluating [{}/{}]'.format(i, len(batches)))
+                gc.collect()
+            em, f1, acc, bleu, rouge_l = score(predictions, dev_y)
+            log.info("[dev EM: {} F1: {}]".format(em, f1))
+            
+            
+            if math.fabs(em - checkpoint['em']) > 1e-3 or math.fabs(f1 - checkpoint['f1']) > 1e-3:
+                log.info('Inconsistent: recorded EM: {} F1: {}'.format(checkpoint['em'], checkpoint['f1']))
+                log.error('Error loading model: current code is inconsistent with code used to train the previous model.')
+                exit(1)
+            best_val_score = checkpoint['best_eval']
+            
+            exit(0)
     else:
         model = DocReaderModel(opt, embedding)
         epoch_0 = 1
@@ -73,19 +92,32 @@ def main():
         # eval
         batches = BatchGen(dev, batch_size=args.batch_size, evaluation=True, gpu=args.cuda)
         predictions = []
-        for i, batch in enumerate(batches):
-            predictions.extend(model.predict(batch))
-            log.debug('> evaluating [{}/{}]'.format(i, len(batches)))
-        em, f1 = score(predictions, dev_y)
-        log.warning("dev EM: {} F1: {}".format(em, f1))
+        
+        
+        if epoch >= epoch_0 + args.epochs - 1:
+             for i, batch in enumerate(batches):
+                log.debug('> evaluating [{}/{}]'.format(i, len(batches)))
+                predictions.extend(model.predict(batch))
+                gc.collect()
+       
+            
+            
+        
+        em, f1, acc, bleu, rouge_l =  (1,1,1,1,1)
+        if epoch >= epoch_0 + args.epochs - 1:
+             em, f1, acc, bleu, rouge_l = score(predictions, dev_y)
+                
+       
+        log.warning("dev EM: {} F1: {} Bleu: {} Rouge_L: {}".format(em, f1, bleu, rouge_l))
         if args.save_dawn_logs:
             time_diff = datetime.now() - dawn_start
             log.warning("dawn_entry: {}\t{}\t{}".format(epoch, f1/100.0, float(time_diff.total_seconds() / 3600.0)))
         # save
+        best_val_score = 1
         if not args.save_last_only or epoch == epoch_0 + args.epochs - 1:
             model_file = os.path.join(args.model_dir, 'checkpoint_epoch_{}.pt'.format(epoch))
             model.save(model_file, epoch, [em, f1, best_val_score])
-            if f1 > best_val_score:
+            if f1 >= best_val_score:
                 best_val_score = f1
                 copyfile(
                     model_file,
@@ -157,6 +189,7 @@ def setup():
     parser.add_argument('--max_len', type=int, default=15)
     parser.add_argument('--rnn_type', default='lstm',
                         help='supported types: rnn, gru, lstm')
+    parser.add_argument('--eval_only', type=str2bool, nargs='?', const=True, default=False)
 
     args = parser.parse_args()
 
@@ -342,6 +375,44 @@ def _exact_match(pred, answers):
             return True
     return False
 
+def accuracy(pred, answers):
+    if pred is None or answers is None:
+        return 0
+    pred = _normalize_answer(pred)
+    for a in answers:
+        if pred == _normalize_answer(a):
+            return 1
+    return 0
+
+def bleu_score(pred, answers):
+    try:
+        if pred is None or answers is None:
+            return 0
+        pred = _normalize_answer(pred)
+        maxscore = 0
+        for a in answers:
+            score = sentence_bleu([a], pred, smoothing_function= SmoothingFunction().method1)
+            if score > maxscore:
+                maxscore = score
+    except ValueError:
+        print(pred)
+    return maxscore
+
+def rouge_score(pred, answers):
+    try:
+        if pred is None or answers is None or len(pred.strip()) == 0:
+            return 0
+        pred = _normalize_answer(pred)
+        rogue = Rouge()
+        maxscore = 0
+        for a in answers:
+            score = rogue.get_scores(pred, a)[0]['rouge-l']['f']
+            if score > maxscore:
+                maxscore = score
+    except ValueError:
+        print("An exception occurred! Error message:", ValueError, "pred:", pred, "answers:", answers)
+    return maxscore
+
 
 def _f1_score(pred, answers):
     def _score(g_tokens, a_tokens):
@@ -361,16 +432,25 @@ def _f1_score(pred, answers):
     return max(scores)
 
 
+
+
 def score(pred, truth):
     assert len(pred) == len(truth)
-    f1 = em = total = 0
+    f1 = em = acc = total = 0
+    bleu = rouge_l = 0
     for p, t in zip(pred, truth):
         total += 1
         em += _exact_match(p, t)
         f1 += _f1_score(p, t)
+        acc += accuracy(p, t)
+        bleu += bleu_score(p, t)
+        rouge_l += rouge_score(p, t)
     em = 100. * em / total
     f1 = 100. * f1 / total
-    return em, f1
+    acc = 100. * acc / total
+    bleu = 100. * bleu / total
+    rouge_l = 100. * rouge_l / total
+    return em, f1, acc, bleu, rouge_l
 
 
 if __name__ == '__main__':

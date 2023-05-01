@@ -1,6 +1,3 @@
-#!/usr/bin/env bash
-
-# check if requirements are met
 REQUIRED=(
     "wget"
     "unzip"
@@ -9,7 +6,7 @@ REQUIRED=(
 )
 for ((i=0;i<${#REQUIRED[@]};++i)); do
     if ! [ -x "$(command -v ${REQUIRED[i]})" ]; then
-        echo 'Error: ${REQUIRED[i]} is not installed.' >&2
+        echo "Error: ${REQUIRED[i]} is not installed." >&2
         exit -1
     fi
 done
@@ -21,14 +18,14 @@ mkdir -p $SQUAD_DIR
 mkdir -p $GLOVE_DIR
 
 URLS=(
-    "https://rajpurkar.github.io/SQuAD-explorer/dataset/train-v1.1.json"
-    "https://rajpurkar.github.io/SQuAD-explorer/dataset/dev-v1.1.json"
-    "http://nlp.stanford.edu/data/glove.840B.300d.zip"
+    #"https://rajpurkar.github.io/SQuAD-explorer/dataset/train-v1.1.json"
+    #"https://rajpurkar.github.io/SQuAD-explorer/dataset/dev-v1.1.json"
+    #"http://nlp.stanford.edu/data/glove.840B.300d.zip"
 )
 FILES=(
-    "$SQUAD_DIR/train-v1.1.json"
-    "$SQUAD_DIR/dev-v1.1.json"
-    "$GLOVE_DIR/glove.840B.300d.zip"
+   # "$SQUAD_DIR/train-v1.1.json"
+    #"$SQUAD_DIR/dev-v1.1.json"
+    #"$GLOVE_DIR/glove.840B.300d.zip"
 )
 for ((i=0;i<${#URLS[@]};++i)); do
     file=${FILES[i]}

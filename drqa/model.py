@@ -24,7 +24,6 @@ from .rnn_reader import RnnDocReader
 
 logger = logging.getLogger(__name__)
 
-
 class DocReaderModel(object):
     """High level model that handles intializing the underlying network
     architecture, saving, updating examples, and predicting examples.
@@ -96,34 +95,46 @@ class DocReaderModel(object):
         self.updates += 1
 
     def predict(self, ex):
+        #print("line 98")
         # Eval mode
         self.network.eval()
-
+        #print("line 101")
         # Transfer to GPU
         if self.opt['cuda']:
+            #inputs = [Variable(e.to(torch.device('cpu'))) for e in ex[:7]]
             inputs = [Variable(e.cuda()) for e in ex[:7]]
         else:
             inputs = [Variable(e) for e in ex[:7]]
 
+        #print("line 109")
         # Run forward
         with torch.no_grad():
             score_s, score_e = self.network(*inputs)
 
+        #print("line 114")
         # Transfer to CPU/normal tensors for numpy ops
         score_s = score_s.data.cpu()
         score_e = score_e.data.cpu()
 
+        #print("line 119")
         # Get argmax text spans
         text = ex[-2]
         spans = ex[-1]
         predictions = []
         max_len = self.opt['max_len'] or score_s.size(1)
+        #print("line 125")
         for i in range(score_s.size(0)):
+            #print("line 127")
             scores = torch.ger(score_s[i], score_e[i])
+            #print("line 129")
             scores.triu_().tril_(max_len - 1)
+            #print("line 131")
             scores = scores.numpy()
+            #print("line 133")
             s_idx, e_idx = np.unravel_index(np.argmax(scores), scores.shape)
+            #print("line 135")
             s_offset, e_offset = spans[i][s_idx][0], spans[i][e_idx][1]
+            #print("line 137")
             predictions.append(text[i][s_offset:e_offset])
 
         return predictions

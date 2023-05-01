@@ -114,38 +114,58 @@ class RnnDocReader(nn.Module):
         x2_mask = question padding mask        [batch * len_q]
         """
         # Embed both document and question
-        x1_emb = self.embedding(x1)
-        x2_emb = self.embedding(x2)
 
+        #print("rnn reader line 118")
+        
+        x1_emb = self.embedding(x1)
+        
+        #print("rnn reader line 122")
+        x2_emb = self.embedding(x2)
+        #print("rnn reader line 124")
         # Dropout on embeddings
         if self.opt['dropout_emb'] > 0:
+          #  print("rnn reader line 127")
             x1_emb = nn.functional.dropout(x1_emb, p=self.opt['dropout_emb'],
                                            training=self.training)
+         #   print("rnn reader line 130")
             x2_emb = nn.functional.dropout(x2_emb, p=self.opt['dropout_emb'],
                                            training=self.training)
 
-        drnn_input_list = [x1_emb, x1_f]
+        #print("x1_f: ", x1_f.shape)
+        #print("rnn reader line 134")
+        #drnn_input_list = [x1_emb, x1_f]
+        drnn_input_list = [x1_emb]
         # Add attention-weighted question representation
         if self.opt['use_qemb']:
             x2_weighted_emb = self.qemb_match(x1_emb, x2_emb, x2_mask)
             drnn_input_list.append(x2_weighted_emb)
+            print("use qemb")
         if self.opt['pos']:
             drnn_input_list.append(x1_pos)
+            print("use pos")
         if self.opt['ner']:
             drnn_input_list.append(x1_ner)
+            print("use ner")
+        #print("rnn reader line 144")
         drnn_input = torch.cat(drnn_input_list, 2)
+        #print("rnn reader line 146")
         # Encode document with RNN
         doc_hiddens = self.doc_rnn(drnn_input, x1_mask)
-
+        #print("rnn reader line 149")
         # Encode question with RNN + merge hiddens
         question_hiddens = self.question_rnn(x2_emb, x2_mask)
+        #print("rnn reader line 152")
         if self.opt['question_merge'] == 'avg':
             q_merge_weights = layers.uniform_weights(question_hiddens, x2_mask)
         elif self.opt['question_merge'] == 'self_attn':
             q_merge_weights = self.self_attn(question_hiddens, x2_mask)
+        #print("rnn reader line 157")
         question_hidden = layers.weighted_avg(question_hiddens, q_merge_weights)
+        #print("rnn reader line 159")
 
         # Predict start and end positions
         start_scores = self.start_attn(doc_hiddens, question_hidden, x1_mask)
+        #print("rnn reader line 163")
         end_scores = self.end_attn(doc_hiddens, question_hidden, x1_mask)
+        #print("rnn reader line 165")
         return start_scores, end_scores
